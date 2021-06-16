@@ -14,4 +14,3 @@ Most are small, but some are noticable :
 
 Some of these mods were needed to allow OAuthSD reaching 100% Compliance with OpenID Connect Provider Certification (openid.net), Configuration Basic OP. 
     See : https://oa.dnc.global/web/-Tests-et-certification-.html#oauthsdverslacertificationopenidr
-    
