@@ -66,6 +66,8 @@ Cette modification est synchrone de celle qui est faite sur le plugin SPIP oauth
     
 [dnc132] 2021/03/30 - Etendre le controleur Resource à l'authentification du client avec HPPT Basic.
 
+[dnc136] 2021/06/17 - Bug : $authCode["expires"] may be NULL (see dnc50), if it does the test fails to detect the situation.  
+
 
 CHANGELOG for 1.x
 =================

@@ -54,7 +54,7 @@ class AuthorizationCode implements GrantTypeInterface
 
             return false;
         }
-
+        
         $code = $request->request('code');
         if (!$authCode = $this->storage->getAuthorizationCode($code)) {
             $response->setError(400, 'invalid_grant', 'Authorization code doesn\'t exist or is invalid for the client');
@@ -73,14 +73,14 @@ class AuthorizationCode implements GrantTypeInterface
                 return false;
             }
         }
-
-        if (!isset($authCode['expires'])) {
+ 
+        if (empty($authCode['expires'])) {     //[dnc136] if (!isset($authCode['expires'])) {   // expires may be NULL, see dnc50
             throw new \Exception('Storage must return authcode with a value for "expires"');
         }
 
         if ($authCode["expires"] < time()) {
             $response->setError(400, 'invalid_grant', "The authorization code has expired");
-
+        
             return false;
         }
         
