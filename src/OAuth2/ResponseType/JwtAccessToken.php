@@ -126,7 +126,7 @@ class JwtAccessToken extends AccessToken
     {
         // token to encrypt
         $expires = time() + $this->config['access_lifetime'];
-        $id = $this->generateAccessToken();
+        $id = $this->generateAccessToken(); // nothing to do with any access token, just a cryptographic UID
 
         $payload = array(
             'id'         => $id, // for BC (see #591)
