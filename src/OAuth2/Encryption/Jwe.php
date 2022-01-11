@@ -20,17 +20,49 @@ use InvalidArgumentException;
 
 /**
 * @author B.Degoy https://degoy.com
-* credits to Nov Matake https://github.com/nov/jose-php
+* d'après Nov Matake https://github.com/nov/jose-php
 */
-class Jwe {
+class Jwe implements EncryptionInterface {
 
     var $content; // or 'plaintext'
     var $raw;
     var $cipher_text;
-    var $content_encryption_key;
+    
+    /**
+    * urlSafeB64Decode de la clé cryptée passée par le JWT si le Mode de gestion de clé CEK est autre que 'dir'
+    * 
+    * @var mixed
+    */
     var $jwe_encrypted_cek;
-    var $encryption_key;
-    var $mac_key;
+    
+    /**
+    * Content Encryption Key (CEK).
+    * En encodage du JWE, la valeur est définie par la fonction encryptContentEncryptionKey.
+    * En décodage du JWE la valeur est définie par la fonction decryptContentEncryptionKey :
+    * Si le Mode de gestion de clé est Cryptage Direct, la valeur $key est prise dans l'appel de la méthode decode ou peut avoir été passée par la méthode setCEK. 
+    * Sinon, la fonction décripte $key en fonction de l'algorithme passé dans le header.   
+    * 
+    * @var mixed
+    */
+    private $content_encryption_key;
+    
+    /**
+    * Première moitié de la CEK 
+    * Doit uniquement être déduite de content_encryption_key par la méthode deriveEncryptionAndMacKeys()
+    *          
+    * @var mixed
+    */
+    private $mac_key;
+    
+    /**
+    * passphrase pour openssl_encrypt().
+    * Deuxième moitié de la CEK 
+    * Doit uniquement être déduite de content_encryption_key par la méthode deriveEncryptionAndMacKeys()
+    *          
+    * @var mixed
+    */
+    private $encryption_key;
+               
     var $iv;
     var $authentication_tag;
     var $auth_data;
@@ -83,6 +115,8 @@ class Jwe {
     */
     public function decode($jwe, $key, $allowedAlgorithms = true)
     {
+        //DebugBreak("435347910947900005@127.0.0.1;d=1");  //DEBUG
+        
         if (!strpos($jwe, '.')) {
             return false;
         }
@@ -103,15 +137,13 @@ class Jwe {
 
         $alg = $this->header['alg'];
         if ( $alg == 'dir' ) {
-            // Mode de gestion de clé CEK = Cryptage Direct : la clé est transmise hors ligne, 
-            // elle a déjà été enregistrée à l'étape smartconnect_register_start. 
-            // smartconnect_register la passe avec la méthode setCEK().
+            // Mode de gestion de clé CEK = Cryptage Direct : la clé est transmise hors ligne, non cryptée et doit être fournie dans l'appel de la méthode.
+            $this->jwe_encrypted_cek = $key;
             if ( null === ($this->jwe_encrypted_cek) )
                 return false;  
 
         } else {
-
-            // La clé CEK est passée par le JWE
+            // La clé CEK est passée par le JWE sous forme cryptée
             if ( null === ($this->jwe_encrypted_cek = $this->urlSafeB64Decode($enckey64)))
                 return false;
         }
@@ -138,20 +170,19 @@ class Jwe {
         // decrypt CipherText and authenticate
         $this->decryptContentEncryptionKey($key);
         $this->deriveEncryptionAndMacKeys();
-        if ( ! $this->decryptCipherText() ) 
+        if ( $this->checkAuthenticationTag() ) {
+            $content_encoding_method = $this->TranslateJei2OpenSSL($this->header['enc']);
+            if ( ! $this->decryptCipherText($content_encoding_method) ) 
             return false;
-        /*if ( ! $this->checkAuthenticationTag() )
-            return false;   //*/
+        } else {
+            return false;
+        }
 
         // Return JWE payload
         //return $this->content;
         return trim($this->content, "\x00..\x1F");       // delete trailing invisible chars
     }
 
-    public function setCEK( $cek ) {
-        $this->jwe_encrypted_cek = $cek;   
-        $this->content_encryption_key = $cek;     // Mode de gestion de clé CEK
-    }
 
     ////////////
 
@@ -213,30 +244,30 @@ class Jwe {
     /*
     private function cipher() {
 
-    switch ($this->header['enc']) {
-    case 'A128GCM':     
-    case 'A256GCM':
-    throw new JOSE_Exception_UnexpectedAlgorithm('Algorithm not supported');
-    case 'A128CBC-HS256':
-    case 'A256CBC-HS512':
-    $cipher = new AES(AES::MODE_CBC);                      //***** AES
-    break;
-    default:
-    throw new JOSE_Exception_UnexpectedAlgorithm('Unknown algorithm');
-    }
-    switch ($this->header['enc']) {
-    case 'A128GCM':
-    case 'A128CBC-HS256':
-    $cipher->setBlockLength(128);
-    break;
-    case 'A256GCM':
-    case 'A256CBC-HS512':
-    $cipher->setBlockLength(256);
-    break;
-    default:
-    throw new JOSE_Exception_UnexpectedAlgorithm('Unknown algorithm');
-    }
-    return $cipher;
+        switch ($this->header['enc']) {
+        case 'A128GCM':     
+        case 'A256GCM':
+            throw new JOSE_Exception_UnexpectedAlgorithm('Algorithm not supported');
+        case 'A128CBC-HS256':
+        case 'A256CBC-HS512':
+            $cipher = new AES(AES::MODE_CBC);                      //***** AES
+            break;
+        default:
+            throw new JOSE_Exception_UnexpectedAlgorithm('Unknown algorithm');
+        }
+        switch ($this->header['enc']) {
+        case 'A128GCM':
+        case 'A128CBC-HS256':
+            $cipher->setBlockLength(128);
+            break;
+        case 'A256GCM':
+        case 'A256CBC-HS512':
+            $cipher->setBlockLength(256);
+            break;
+        default:
+            throw new JOSE_Exception_UnexpectedAlgorithm('Unknown algorithm');
+        }
+        return $cipher;
     } */
 
     private function generateRandomBytes($length) {
@@ -280,12 +311,12 @@ class Jwe {
     private function encryptContentEncryptionKey($key) {
         switch ($this->header['alg']) {
             case 'RSA1_5':                                                             
-                $rsa = $this->rsa($key, RSA::ENCRYPTION_PKCS1);                             //***** rsa
-                $this->jwe_encrypted_cek = $rsa->encrypt($this->content_encryption_key);    //***** rsa
+                $rsa = $this->rsa($key, RSA::ENCRYPTION_PKCS1);                             
+                $this->jwe_encrypted_cek = $rsa->encrypt($this->content_encryption_key);    
                 break;
             case 'RSA-OAEP':
-                $rsa = $this->rsa($key, RSA::ENCRYPTION_OAEP);             //***** rsa
-                $this->jwe_encrypted_cek = $rsa->encrypt($this->content_encryption_key);    //***** rsa
+                $rsa = $this->rsa($key, RSA::ENCRYPTION_OAEP);             
+                $this->jwe_encrypted_cek = $rsa->encrypt($this->content_encryption_key);   
                 break;
             case 'dir':
                 $this->jwe_encrypted_cek = '';
@@ -304,21 +335,27 @@ class Jwe {
         }
     }
 
+    /**
+    * En décodage du JWE, définit content_encryption_key.
+    * Si le Mode de gestion de clé est Cryptage Direct, la valeur $key est prise tele quelle. 
+    * Sinon, la fonction décripte $key en fonction de l'algorithme passé dans le header.   
+    * 
+    * @param mixed $key
+    */
     private function decryptContentEncryptionKey($key) {
         $this->generateContentEncryptionKey(null); # NOTE: run this always not to make timing difference
         $fake_content_encryption_key = $this->content_encryption_key;
         switch ($this->header['alg']) {
             case 'RSA1_5':
-                $rsa = $this->rsa($key, RSA::ENCRYPTION_PKCS1);    //***** rsa
+                $rsa = $this->rsa($key, RSA::ENCRYPTION_PKCS1);   
                 $this->content_encryption_key = $rsa->decrypt($this->jwe_encrypted_cek);
                 break;
             case 'RSA-OAEP':
-                $rsa = $this->rsa($key, RSA::ENCRYPTION_OAEP);      //***** rsa
+                $rsa = $this->rsa($key, RSA::ENCRYPTION_OAEP);    
                 $this->content_encryption_key = $rsa->decrypt($this->jwe_encrypted_cek);
                 break;
             case 'dir':
                 $this->content_encryption_key = $key;
-                $this->encryption_key = $key; //*****
                 break;
             case 'A128KW':
             case 'A256KW':
@@ -339,7 +376,7 @@ class Jwe {
     }
 
     private function deriveEncryptionAndMacKeys() {
-        switch ($this->header['enc']) {                         //
+        switch ($this->header['enc']) {                 
             case 'A128GCM':
             case 'A256GCM':
                 $this->encryption_key = $this->content_encryption_key;
@@ -365,66 +402,55 @@ class Jwe {
     }
 
 
+    private function encryptCipherText($plaintext, $cipher) {
 
+        // @see https://www.php.net/manual/fr/function.openssl-encrypt.php
 
-
-    private function encryptCipherText() {
-        /*
-        $cipher = $this->cipher();
-        $cipher->setKey($this->encryption_key);
-        $cipher->setIV($this->iv);
-        $this->cipher_text = $cipher->encrypt($this->content);
-        if (!$this->cipher_text) {
-        throw new JOSE_Exception_DecryptionFailed('Payload encryption failed');
-        } */
-
-
-        $this->cipher_text = ''; 
+        $ivlen = openssl_cipher_iv_length($cipher);
+        $iv = openssl_random_pseudo_bytes($ivlen);
+        $this->cipher_text = openssl_encrypt(
+            $plaintext, 
+            $cipher, 
+            $this->encryption_key,              // passphrase 
+            OPENSSL_RAW_DATA|OPENSSL_ZERO_PADDING,  // options 
+            $iv, 
+            $tag);
 
     }
 
-    private function decryptCipherText() {
-        /*$cipher = $this->cipher();
-        $cipher->setKey($this->encryption_key);
-        $cipher->setIV($this->iv);
-        $this->content = $cipher->decrypt($this->cipher_text);
-        if ( ! ((bool)$return = $this->content) ) {
-        throw new JOSE_Exception_DecryptionFailed('Payload decryption failed');
-        return $return;
-        }*/ 
+    private function decryptCipherText($cipher) {
 
-        if ( $this->checkAuthenticationTag() ) {
+        //@see https://www.php.net/manual/fr/function.openssl-decrypt.php
 
-            $content_encoding_method = $this->TranslateJei2OpenSSL($this->header['enc']);
-
-            try {
-                $this->content = openssl_decrypt(
-                    $this->cipher_text, 
-                    $content_encoding_method, 
-                    $this->encryption_key, 
-                    OPENSSL_RAW_DATA|OPENSSL_ZERO_PADDING, 
-                    $this->iv
-                );
-            } catch(Exception $e) {
-                print_r($e);
-                return false;    
-            }
-            if ( ! ((bool)$this->content) ) {
-                return false;    
-            } 
-            return $this->content;
+        try {
+            $this->content = openssl_decrypt(
+                $this->cipher_text,                 // data
+                $cipher,                            // cypher_algo 
+                $this->encryption_key,              // passphrase 
+                OPENSSL_RAW_DATA|OPENSSL_ZERO_PADDING,  // options 
+                $this->iv                           // iv
+            );
+        } catch(Exception $e) {
+            // log ???
+            return false;    
         }
+        if ( ! ((bool)$this->content) ) {
+            // log ???
+            return false;    
+        } 
+        return $this->content;
+
     }
 
     private function generateAuthenticationTag() {
         $this->authentication_tag = $this->calculateAuthenticationTag();
     }
 
-    private function calculateAuthenticationTag($use_raw = false) {
+    private function calculateAuthenticationTag($use_raw = false) {     //TODO: $use_raw ???
         switch ($this->header['enc']) {
             case 'A128GCM':
             case 'A256GCM':
-                return $this->calculateAuthenticationTagGCM();
+                return $this->calculateAuthenticationTagGCM();     // Ne pas utiliser, bug!
             case 'A128CBC-HS256':
                 return $this->calculateAuthenticationTagCBC(256);
             case 'A256CBC-HS512':
@@ -434,14 +460,22 @@ class Jwe {
         }
     }
 
-    private function calculateAuthenticationTagGCM() {
+    private function calculateAuthenticationTagGCM() {    //TODO: à vérifier et tester
+
+        if (!$this->auth_data) {
+            $this->auth_data = $this->compact((object) $this->header);
+        }
+
+        $auth_data_length = strlen($this->auth_data);
 
         $secured_input = implode('', array(
+            $this->auth_data,
             $this->iv,
             $this->cipher_text,
             // NOTE: PHP doesn't support 64bit big endian, so handling upper & lower 32bit.
             pack('N2', ($auth_data_length / $max_32bit) * 8, ($auth_data_length % $max_32bit) * 8)
-        ));
+        )); 
+
         return substr(
             hash_hmac('sha' . $sha_size, $secured_input, $this->mac_key, true),
             0, $sha_size / 2 / 8
@@ -449,9 +483,11 @@ class Jwe {
     }
 
     private function calculateAuthenticationTagCBC($sha_size) {
+
         if (!$this->auth_data) {
             $this->auth_data = $this->compact((object) $this->header);
         }
+
         $auth_data_length = strlen($this->auth_data);
         $max_32bit = 2147483647;
         $secured_input = implode('', array(
@@ -461,17 +497,19 @@ class Jwe {
             // NOTE: PHP doesn't support 64bit big endian, so handling upper & lower 32bit.
             pack('N2', ($auth_data_length / $max_32bit) * 8, ($auth_data_length % $max_32bit) * 8)
         ));
+
         return substr(
             hash_hmac('sha' . $sha_size, $secured_input, $this->mac_key, true),
             0, $sha_size / 2 / 8
         );
     }
+    
 
     private function checkAuthenticationTag() {
         if (hash_equals($this->authentication_tag, $this->calculateAuthenticationTag())) {
             return true;
         } else {
-            throw new JOSE_Exception_UnexpectedAlgorithm('Invalid authentication tag');
+            //throw new JOSE_Exception_UnexpectedAlgorithm('Invalid authentication tag');
             return false;
         }
     }
@@ -505,12 +543,12 @@ class Jwe {
             $padlen = 4 - $remainder;
             $b64 .= str_repeat('=', $padlen);
         } //*/
-        
+
         $b64 = str_replace(
             array('-', '_'),
             array('+', '/'),
             $b64);
-            
+
         return base64_decode($b64);
     }
 
@@ -533,6 +571,6 @@ class Jwe {
         }
         return $this->urlSafeB64Encode($stringified);
     }
-    
+
 
 }
