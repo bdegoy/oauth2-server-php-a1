@@ -95,4 +95,15 @@ class ClientCredentials extends HttpBasic implements GrantTypeInterface
             $this->clientData = $this->storage->getClientDetails($this->getClientId());
         }
     }
+    
+    /** [dnc91h]
+     * Get the acr value
+     *
+     * @return mixed
+     */
+    public function getAcrValue()
+    {
+        return 0;   // A Client Credential has no value for other Authentication Method.
+    }
+    
 }
