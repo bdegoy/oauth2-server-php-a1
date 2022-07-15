@@ -473,8 +473,15 @@ OpenIDAuthorizationCodeInterface
     */
     public function getUser($username)
     {
-        $stmt = $this->db->prepare($sql = sprintf('SELECT * from %s where username=:username', $this->config['user_table']));
-        $stmt->execute(array('username' => $username));
+
+        $user_table = $this->config['user_table'];
+        if ( $user_table == TABLE_PREFIX . 'auteurs' ) {  //[spip] buy.dnc.global utilise la table de SPIP
+            $stmt = $this->db->prepare($sql = sprintf('SELECT * from %s where login=:username', $this->config['user_table']));
+            $stmt->execute(array('username' => $username));     
+        } else if ( $user_table == TABLE_PREFIX . 'users' ) {  // OAuthSD utilise la table OIDC standard
+            $stmt = $this->db->prepare($sql = sprintf('SELECT * from %s where login=:username', $this->config['user_table']));
+            $stmt->execute(array('username' => $username));    
+        } // sinon table inconnue     
 
         if (!$userInfo = $stmt->fetch(\PDO::FETCH_ASSOC)) {
             return false;
