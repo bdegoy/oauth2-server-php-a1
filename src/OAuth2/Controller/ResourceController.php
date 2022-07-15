@@ -1,6 +1,6 @@
 <?php
 /*
-[dnc132] 2021/03/30 : Extend the Resource controller to client authentication with HPPT Basic.
+[dnc132] 2021/03/30 : Extend the Resource controller to client authentication with HTTP Basic.
 Allow to retreive the authentication method and client_id.
 */
 
@@ -99,13 +99,9 @@ class ResourceController implements ResourceControllerInterface
         $this->client_authentication_method = null;
         $this->client_id = null;
         $this->token = null;
-        $method = null;
-
+        
         // Get authorization method, check token first
-
-        $access_token_name = $request->query($this->config['token_param_name']);
-        if ( empty($access_token_name) ) $access_token_name = 'access_token';     
-
+        $method = null;
         $autheader = $request->headers('AUTHORIZATION');        
         if ( strtolower(substr($autheader, 0, 6)) == 'bearer' ) {
             $method = 'bearer_token';
