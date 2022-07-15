@@ -19,6 +19,25 @@
 *  
 * @author : Bertrand Degoy https://oa.dnc.global
 * @author : bschaffer https://github.com/bshaffer/oauth2-server-php
+* 
+* 
+* [dnc102] 2021/08/10 - JWE validation
+* OAuthSD Introspection controller may receive a JWE encrypted JWT ID token as well as a regular JWT ID Token.
+* If a JWE token is recognized, it is decrypted and the process continue with the JWT payload. 
+* 
+* The JWE is encrypted with a symetric algorithm. To decrypt it, we need a secret key known by both 
+* the application emiting the JWE and this OP. 
+* THE JWE KEY SHOULD NOT BE ANY PUBLIC DATA !
+* Nor can it be the client public key, since it should remain secret inside the OP.
+* it is also not recommended to use the client secret, as it can be revealed by improper use in 
+* applications without backend.
+* 
+* When the Introspection controller receive the JWE, it cannot determine the application 
+* before decryption (unlike a JWT does). 
+* Thus, the secret is a value predetermined inside a private group of applications 
+* and protected resources, including this OP.
+* 
+* If Direct Encryption is used, define Content Encryption Key (CEK) using setCEK() method.
 *
 * Copyright (c) 2019-2021 - Bertrand Degoy
 * Licence : GPL v3.0
@@ -58,6 +77,12 @@ class IntrospectController extends ResourceController implements IntrospectContr
     * @var bool
     */
     protected $needs_client_authentication = true;
+    
+    /** [dnc102]
+    * Content Encryption Key for JWE Direct Encryption
+    * @var mixed;
+    */
+    protected $cek = null;
 
 
     /**
@@ -104,16 +129,24 @@ class IntrospectController extends ResourceController implements IntrospectContr
         // @see rfc7662 : the parameter name should be 'token', even in the case of an access or refresh token.  
         $token_param = trim($request->request('token'));     
 
-        if (2 === substr_count($token_param, '.')) {
+        //[dnc102] JWE, JWT or Access Token ?
+        $segments = explode('.', $token_param);
 
-            ////  JWT Token  ////
-            $answer = $this->validate_jwt($token_param, $request, $response);  
+        switch ( count($segments) ) {
 
-        } else {
+            case 5 :    //[dnc102] JWE validation
+                // decode JWE
+                $jweUtil = new \OAuth2\Encryption\Jwe(); 
+                $token_param = $jweUtil->decode($token, $cek);
+                // and continue with the payload.
+            case 3 :    // JWT
+                $answer = $this->validate_jwt($token_param, $request, $response); 
+                break;
 
-            ////  Access Token  ////  maybe, or something else ;)
-            $answer = $this->tokenStorage->getAccessToken($token_param);
-            $answer['active'] = (time() < $answer["expires"]);
+            default :   // Access Token or something else ;)
+                $answer = $this->tokenStorage->getAccessToken($token_param);
+                $answer['active'] = (time() < $answer["expires"]);
+                break;
 
         }
 
@@ -148,7 +181,7 @@ class IntrospectController extends ResourceController implements IntrospectContr
             return false;
         }
 
-        if ( $this->needs_client_authentication ) {  // Client authentication might have been processed before. @see https://oa.dnc.global/web/-API-OpenID-Connect-Points-d-extremite-.html#apiopenidconnectintrospection
+        if ( $this->needs_client_authentication ) {  // Client authentication might have been processed before. @see https://oa.dnc.global/-API-OpenID-Connect-Points-d-extremite-.html#apiopenidconnectintrospection
 
             // Authenticate the client.
             // Do not confuse with the validation of the token which is the object of this introspection !
@@ -167,7 +200,7 @@ class IntrospectController extends ResourceController implements IntrospectContr
 
 
     /**
-    * Decode a JWT, validate its signature and return JWT payload if and set response according to JWT validity.
+    * Decode a JWT, validate its signature and return JWT payload and set response according to JWT validity.
     * @see rfc7662 section 2.3.
     * The method returns the payload if the JWT is properly formed and authorized.
     * A JWT being out of time limits ( active = false) is not considered an introspection error.
@@ -184,7 +217,7 @@ class IntrospectController extends ResourceController implements IntrospectContr
 
     public function validate_jwt( String $undecodedJWT, RequestInterface $request, ResponseInterface $response, String $enforcedclaims = null  )
     {
-        
+
         $jwt = $this->encryptionUtil->decode($undecodedJWT, null, false);
 
         // Verify the JWT
@@ -193,35 +226,35 @@ class IntrospectController extends ResourceController implements IntrospectContr
 
             return null;
         }
-        
+
         if ( is_null($enforcedclaims) ) $enforcedclaims = \OAuth2\OpenID\ResponseType\IdToken::ENFORCEDCLAIMS; 
 
-        if (empty(trim($jwt['sub'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'sub') !== false ) {
+        if (empty(trim(@$jwt['sub'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'sub') !== false ) {
             $response->setError(400, 'invalid_grant', "No subject (sub) provided");
 
             return null;
         }
 
-        if (empty(trim($jwt['iss'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'iss') !== false ) {
+        if (empty(trim(@$jwt['iss'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'iss') !== false ) {
             $response->setError(400, 'invalid_grant', "No issuer (iss) provided");
 
             return null;
         }
 
-        if (empty(trim($jwt['exp'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'exp') !== false ) {
+        if (empty(trim(@$jwt['exp'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'exp') !== false ) {
             $response->setError(400, 'invalid_grant', "Expiration (exp) time must be present");
 
             return null;
         }
 
-        if (empty(trim($jwt['nbf'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'nbf') !== false ) {
+        if (empty(trim(@$jwt['nbf'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'nbf') !== false ) {
             $response->setError(400, 'invalid_grant', "Not before (nbf) time must be present");
 
             return null;
         }
 
-        if (empty(trim($jwt['aud'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'aud') !== false ) {
-            $response->setError(400, 'invalid_grant', "Not before (nbf) time must be present");
+        if (empty(trim(@$jwt['aud'])) AND !is_null($enforcedclaims) AND strpos($enforcedclaims, 'aud') !== false ) {
+            $response->setError(400, 'invalid_grant', "Audience (aud) must be present");
 
             return null;
         }
@@ -239,7 +272,7 @@ class IntrospectController extends ResourceController implements IntrospectContr
             return null;
         }
         // Check the not before time
-        if ($notBefore = $jwt['nbf']) {
+        if ($notBefore = @$jwt['nbf']) {
             if (ctype_digit($notBefore)) {
                 if ($notBefore > time()) {
                     $is_active = false;
@@ -257,7 +290,7 @@ class IntrospectController extends ResourceController implements IntrospectContr
         if ( isset($jwt['aud']) && !is_null($audience) ) {  
             // Audience may be an array or a space delimited list of StringOrURI values.
             if ( is_array($audience) ) $audience = implode(' ', $audience); 
-            if ( strpos($jwt['aud'], $audience) !== false )  {
+            if ( strpos($jwt['aud'], $audience) === false )  {      //***
                 $response->setError(400, 'invalid_grant', "Invalid audience (aud)");
 
                 return null;
@@ -313,6 +346,16 @@ class IntrospectController extends ResourceController implements IntrospectContr
         */
 
         return $answer;         
-    }    
+    } 
+    
+    /**[dnc102]
+    * Define Content Encryption Key (CEK) needed for JWE Direct Encryption.
+    *  
+    * @param mixed $cek
+    */
+    public function setCEK($cek)
+    {   
+        $this->cek = $cek;
+    }  
 
 }
